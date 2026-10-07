@@ -88,6 +88,9 @@ public class TransferManifestAppService {
             if (!un.canAccept(categoryCode)) {
                 return Mono.error(new BizException("处置单位不能接收该危废类别"));
             }
+            if (!cat.isEnabled()) {
+                return Mono.error(new BizException("危废类别已停用，不能开具新联单；先前在办的联单照走"));
+            }
             return transferPlanRepository.findBySourceCategoryYear(sourceId, categoryCode, year)
                     .switchIfEmpty(Mono.error(new BizException("没有对应的年度计划，不能开具联单")))
                     .flatMap(plan -> {

@@ -47,6 +47,7 @@ public class TransferManifestRepositoryImpl extends BaseBlockingRepository imple
     private final ManifestSignoffMapper manifestSignoffMapper;
     private final WasteStockMapper wasteStockMapper;
     private final BizNoService bizNoService;
+    private final CategoryConcurrencyGuard categoryGuard;
     private final TransactionTemplate txTemplate;
 
     public TransferManifestRepositoryImpl(TransferManifestMapper transferManifestMapper,
@@ -54,26 +55,34 @@ public class TransferManifestRepositoryImpl extends BaseBlockingRepository imple
                                           ManifestSignoffMapper manifestSignoffMapper,
                                           WasteStockMapper wasteStockMapper,
                                           BizNoService bizNoService,
+                                          CategoryConcurrencyGuard categoryGuard,
                                           PlatformTransactionManager transactionManager) {
         this.transferManifestMapper = transferManifestMapper;
         this.treatmentUnitMapper = treatmentUnitMapper;
         this.manifestSignoffMapper = manifestSignoffMapper;
         this.wasteStockMapper = wasteStockMapper;
         this.bizNoService = bizNoService;
+        this.categoryGuard = categoryGuard;
         this.txTemplate = new TransactionTemplate(transactionManager);
     }
 
     @Override
     public Mono<TransferManifest> create(TransferManifest manifest, BigDecimal approvedWeight) {
         return blocking(() -> bizNoService.inLock("EM", () -> {
-            // 锁内复核额度：已开出量 + 本趟量不得盖过计划批复总量
-            BigDecimal used = transferManifestMapper.sumTransferWeight(manifest.getPlanId());
-            manifest.requireWithinQuota(approvedWeight, used);
-            TransferManifestPO po = TransferManifestPoConverter.toPo(manifest);
-            po.setId(IdUtil.getSnowflakeNextId());
-            po.setManifestNo(bizNoService.nextManifestNo());
-            transferManifestMapper.insert(po);
-            return TransferManifestPoConverter.toDomain(po);
+            // 先 EM 锁再类别锁：锁内复核类别仍启用，停用与开联单严格排先后 ——
+            // 停用先到则这里读到 DISABLED 被挡回，不会开出停用后的新联单。
+            // 额度复核在同一临界区里，两笔并发也不会一起把额度用穿。
+            return categoryGuard.inCategoryLock(manifest.getCategoryCode(), () -> {
+                categoryGuard.requireEnabled(manifest.getCategoryCode(), "开具联单");
+                // 锁内复核额度：已开出量 + 本趟量不得盖过计划批复总量
+                BigDecimal used = transferManifestMapper.sumTransferWeight(manifest.getPlanId());
+                manifest.requireWithinQuota(approvedWeight, used);
+                TransferManifestPO po = TransferManifestPoConverter.toPo(manifest);
+                po.setId(IdUtil.getSnowflakeNextId());
+                po.setManifestNo(bizNoService.nextManifestNo());
+                transferManifestMapper.insert(po);
+                return TransferManifestPoConverter.toDomain(po);
+            });
         }));
     }
 

@@ -36,23 +36,31 @@ public class WasteStockRepositoryImpl extends BaseBlockingRepository implements 
 
     private final WasteStockMapper wasteStockMapper;
     private final BizNoService bizNoService;
+    private final CategoryConcurrencyGuard categoryGuard;
     private final TransactionTemplate txTemplate;
 
     public WasteStockRepositoryImpl(WasteStockMapper wasteStockMapper, BizNoService bizNoService,
+                                    CategoryConcurrencyGuard categoryGuard,
                                     PlatformTransactionManager transactionManager) {
         this.wasteStockMapper = wasteStockMapper;
         this.bizNoService = bizNoService;
+        this.categoryGuard = categoryGuard;
         this.txTemplate = new TransactionTemplate(transactionManager);
     }
 
     @Override
     public Mono<WasteStock> inbound(WasteStock stock) {
         return blocking(() -> bizNoService.inLock("WB", () -> {
-            WasteStockPO po = WasteStockPoConverter.toPo(stock);
-            po.setId(IdUtil.getSnowflakeNextId());
-            po.setBatchNo(bizNoService.nextBatchNo());
-            wasteStockMapper.insert(po);
-            return WasteStockPoConverter.toDomain(po);
+            // 先 WB 锁再类别锁（锁序全项目一致，不成环）：锁内复核类别仍启用，
+            // 与停用严格排先后 —— 停用先到则这里读到 DISABLED 被挡回，不会登进停用后的新入库
+            return categoryGuard.inCategoryLock(stock.getCategoryCode(), () -> {
+                categoryGuard.requireEnabled(stock.getCategoryCode(), "新入库");
+                WasteStockPO po = WasteStockPoConverter.toPo(stock);
+                po.setId(IdUtil.getSnowflakeNextId());
+                po.setBatchNo(bizNoService.nextBatchNo());
+                wasteStockMapper.insert(po);
+                return WasteStockPoConverter.toDomain(po);
+            });
         }));
     }
 

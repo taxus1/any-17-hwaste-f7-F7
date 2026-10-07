@@ -18,4 +18,12 @@ public interface TransferPlanMapper extends BaseMapper<TransferPlanPO> {
 
     @Select("SELECT MAX(plan_no) FROM t_transfer_plan WHERE plan_no LIKE CONCAT(#{prefix}, '%') FOR UPDATE")
     String maxPlanNo(@Param("prefix") String prefix);
+
+    /**
+     * 该类别还没批下来的计划份数（停用影响面用）：草稿 DRAFT、已申报 SUBMITTED 算待批；
+     * 已批复的走完了审批、被驳回的已结案，都不算待批。
+     */
+    @Select("SELECT COUNT(*) FROM t_transfer_plan "
+            + "WHERE del_flag = 0 AND category_code = #{categoryCode} AND status IN ('DRAFT', 'SUBMITTED')")
+    long countPendingByCategory(@Param("categoryCode") String categoryCode);
 }

@@ -32,27 +32,35 @@ public class TransferPlanRepositoryImpl extends BaseBlockingRepository implement
 
     private final TransferPlanMapper transferPlanMapper;
     private final BizNoService bizNoService;
+    private final CategoryConcurrencyGuard categoryGuard;
 
-    public TransferPlanRepositoryImpl(TransferPlanMapper transferPlanMapper, BizNoService bizNoService) {
+    public TransferPlanRepositoryImpl(TransferPlanMapper transferPlanMapper, BizNoService bizNoService,
+                                      CategoryConcurrencyGuard categoryGuard) {
         this.transferPlanMapper = transferPlanMapper;
         this.bizNoService = bizNoService;
+        this.categoryGuard = categoryGuard;
     }
 
     @Override
     public Mono<TransferPlan> create(TransferPlan plan) {
         return blocking(() -> bizNoService.inLock("TP", () -> {
-            Long dup = transferPlanMapper.selectCount(Wrappers.<TransferPlanPO>lambdaQuery()
-                    .eq(TransferPlanPO::getSourceId, plan.getSourceId())
-                    .eq(TransferPlanPO::getCategoryCode, plan.getCategoryCode())
-                    .eq(TransferPlanPO::getPlanYear, plan.getPlanYear()));
-            if (dup != null && dup > 0) {
-                throw new BizException("该单位该类别该年度已存在转移计划，请勿重复申报");
-            }
-            TransferPlanPO po = TransferPlanPoConverter.toPo(plan);
-            po.setId(IdUtil.getSnowflakeNextId());
-            po.setPlanNo(bizNoService.nextPlanNo(plan.getPlanYear()));
-            transferPlanMapper.insert(po);
-            return TransferPlanPoConverter.toDomain(po);
+            // 先 TP 锁再类别锁：锁内复核类别仍启用，停用与立计划严格排先后，
+            // 已停用的类别立不进新计划（追加申报走的是老计划，不经这里，照常走）
+            return categoryGuard.inCategoryLock(plan.getCategoryCode(), () -> {
+                categoryGuard.requireEnabled(plan.getCategoryCode(), "新立转移计划");
+                Long dup = transferPlanMapper.selectCount(Wrappers.<TransferPlanPO>lambdaQuery()
+                        .eq(TransferPlanPO::getSourceId, plan.getSourceId())
+                        .eq(TransferPlanPO::getCategoryCode, plan.getCategoryCode())
+                        .eq(TransferPlanPO::getPlanYear, plan.getPlanYear()));
+                if (dup != null && dup > 0) {
+                    throw new BizException("该单位该类别该年度已存在转移计划，请勿重复申报");
+                }
+                TransferPlanPO po = TransferPlanPoConverter.toPo(plan);
+                po.setId(IdUtil.getSnowflakeNextId());
+                po.setPlanNo(bizNoService.nextPlanNo(plan.getPlanYear()));
+                transferPlanMapper.insert(po);
+                return TransferPlanPoConverter.toDomain(po);
+            });
         }));
     }
 

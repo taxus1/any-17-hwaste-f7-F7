@@ -28,4 +28,13 @@ public interface TransferManifestMapper extends BaseMapper<TransferManifestPO> {
     @Select("SELECT IFNULL(SUM(transfer_weight), 0) FROM t_transfer_manifest "
             + "WHERE del_flag = 0 AND plan_id = #{planId} AND status NOT IN ('REJECTED', 'VOID')")
     BigDecimal sumTransferWeight(@Param("planId") Long planId);
+
+    /**
+     * 该类别还没走完的联单张数（停用影响面用）：已提交 / 已审批 / 在途 / 已签收都算在办；
+     * 货走完了（DISPOSED）、被退回（REJECTED）、作废（VOID）的不算。
+     */
+    @Select("SELECT COUNT(*) FROM t_transfer_manifest "
+            + "WHERE del_flag = 0 AND category_code = #{categoryCode} "
+            + "AND status NOT IN ('REJECTED', 'VOID', 'DISPOSED')")
+    long countOpenByCategory(@Param("categoryCode") String categoryCode);
 }
